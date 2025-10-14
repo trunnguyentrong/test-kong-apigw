@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend-b
+  template:
+    metadata:
+      labels:
+        app: backend-b
+    spec:
+      containers:
+      - name: backend-b
+        image: k8s.gcr.io/echoserver:1.10
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-b
+spec:
+  selector:
+    app: backend-b
+  ports:
+  - port: 8080
+    targetPort: 8080

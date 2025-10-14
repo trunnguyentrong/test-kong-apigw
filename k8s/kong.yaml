@@ -1,0 +1,323 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-kong
+
+---
+# PostgreSQL Database for Kong
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: test-kong
+spec:
+  ports:
+  - port: 5432
+  selector:
+    app: postgres
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: test-kong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:13
+        env:
+        - name: POSTGRES_USER
+          value: "kong"
+        - name: POSTGRES_PASSWORD
+          value: "kong"
+        - name: POSTGRES_DB
+          value: "kong"
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+          subPath: pgdata
+      volumes:
+      - name: postgres-storage
+        emptyDir: {}
+
+---
+# Kong Migration Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kong-migration
+  namespace: test-kong
+spec:
+  template:
+    spec:
+      containers:
+      - name: kong-migration
+        image: kong:3.4
+        env:
+        - name: KONG_DATABASE
+          value: "postgres"
+        - name: KONG_PG_HOST
+          value: "postgres"
+        - name: KONG_PG_USER
+          value: "kong"
+        - name: KONG_PG_PASSWORD
+          value: "kong"
+        command: [ "kong", "migrations", "bootstrap" ]
+      restartPolicy: OnFailure
+
+---
+# Foo Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: foo-deployment
+  namespace: test-kong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: foo
+  template:
+    metadata:
+      labels:
+        app: foo
+    spec:
+      containers:
+      - name: api
+        image: trungnt1205/foo-microservice:latest
+        ports:
+        - containerPort: 8000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foo-service
+  namespace: test-kong
+  labels:
+    app: foo-service
+spec:
+  ports:
+  - port: 5000
+    name: http
+    targetPort: 8000
+  selector:
+    app: foo
+
+---
+# Bar Backend Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bar-deployment
+  namespace: test-kong
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bar
+  template:
+    metadata:
+      labels:
+        app: bar
+    spec:
+      containers:
+      - name: api
+        image: trungnt1205/bar-microservice:latest
+        ports:
+        - containerPort: 8000
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bar-service
+  namespace: test-kong
+  labels:
+    app: bar-service
+spec:
+  ports:
+  - port: 5000
+    name: http
+    targetPort: 8000
+  selector:
+    app: bar
+
+---
+# Kong Proxy Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-proxy
+  namespace: test-kong
+spec:
+  type: NodePort
+  ports:
+  - name: proxy
+    port: 80
+    targetPort: 8000
+    protocol: TCP
+  - name: proxy-ssl
+    port: 443
+    targetPort: 8443
+    protocol: TCP
+  selector:
+    app: kong
+
+---
+# Kong Admin Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: kong-admin
+  namespace: test-kong
+spec:
+  type: ClusterIP
+  ports:
+  - name: admin
+    port: 8001
+    targetPort: 8001
+    protocol: TCP
+  selector:
+    app: kong
+
+---
+# Kong Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kong
+  namespace: test-kong
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: kong
+  template:
+    metadata:
+      labels:
+        app: kong
+    spec:
+      containers:
+      - name: kong
+        image: kong:3.4
+        env:
+        - name: KONG_DATABASE
+          value: "postgres"
+        - name: KONG_PG_HOST
+          value: "postgres"
+        - name: KONG_PG_USER
+          value: "kong"
+        - name: KONG_PG_PASSWORD
+          value: "kong"
+        - name: KONG_PROXY_ACCESS_LOG
+          value: "/dev/stdout"
+        - name: KONG_ADMIN_ACCESS_LOG
+          value: "/dev/stdout"
+        - name: KONG_PROXY_ERROR_LOG
+          value: "/dev/stderr"
+        - name: KONG_ADMIN_ERROR_LOG
+          value: "/dev/stderr"
+        - name: KONG_ADMIN_LISTEN
+          value: "0.0.0.0:8001"
+        - name: KONG_PROXY_LISTEN
+          value: "0.0.0.0:8000, 0.0.0.0:8443 ssl"
+        ports:
+        - name: proxy
+          containerPort: 8000
+        - name: proxy-ssl
+          containerPort: 8443
+        - name: admin
+          containerPort: 8001
+        livenessProbe:
+          httpGet:
+            path: /status
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /status
+            port: 8001
+          initialDelaySeconds: 10
+          periodSeconds: 5
+
+---
+# Kong Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kong-config
+  namespace: test-kong
+data:
+  configure.sh: |
+    #!/bin/sh
+    
+    # Wait for Kong Admin API to be ready
+    until curl -s http://kong-admin.test-kong.svc.cluster.local:8001/status > /dev/null; do
+      echo "Waiting for Kong Admin API..."
+      sleep 2
+    done
+    
+    echo "Kong is ready. Configuring services and routes..."
+    
+    # Configure Foo Service
+    curl -i -X POST http://kong-admin.test-kong.svc.cluster.local:8001/services \
+      --data name=foo-service \
+      --data url='http://foo-service.test-kong.svc.cluster.local:5000'
+    
+    curl -i -X POST http://kong-admin.test-kong.svc.cluster.local:8001/services/foo-service/routes \
+      --data 'paths[]=/foo' \
+      --data name=foo-route \
+      --data strip_path=true
+    
+    # Configure Bar Service
+    curl -i -X POST http://kong-admin.test-kong.svc.cluster.local:8001/services \
+      --data name=bar-service \
+      --data url='http://bar-service.test-kong.svc.cluster.local:5000'
+    
+    curl -i -X POST http://kong-admin.test-kong.svc.cluster.local:8001/services/bar-service/routes \
+      --data 'paths[]=/bar' \
+      --data name=bar-route \
+      --data strip_path=true
+    
+    echo "Kong configuration complete!"
+
+---
+# Kong Configuration Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kong-configure
+  namespace: test-kong
+spec:
+  template:
+    spec:
+      containers:
+      - name: kong-configure
+        image: curlimages/curl:latest
+        command: ["/bin/sh", "/config/configure.sh"]
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: config
+        configMap:
+          name: kong-config
+          defaultMode: 0777
+      restartPolicy: OnFailure
+  backoffLimit: 10

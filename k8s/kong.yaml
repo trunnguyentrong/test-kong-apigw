@@ -98,7 +98,8 @@ spec:
     spec:
       containers:
       - name: api
-        image: trungnt1205/foo-microservice:latest
+        image: hungdo26/foo-microservice:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
 
@@ -137,7 +138,8 @@ spec:
     spec:
       containers:
       - name: api
-        image: trungnt1205/bar-microservice:latest
+        image: hungdo26/bar-microservice:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 8000
 

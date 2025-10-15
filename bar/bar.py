@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 app = FastAPI()
 
-@app.get('/bar')
+@app.get('/')
 def hello():
     return {"msg": "Hello from the bar microservice"}
 
